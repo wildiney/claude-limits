@@ -1,0 +1,21 @@
+{
+  "name": "Claude Limit Tracker",
+  "short_name": "ClaudeLimit",
+  "description": "Acompanhamento de limites de uso do Claude AI",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#3b82f6",
+  "icons": [
+    {
+      "src": "https://anthropic.com/favicon.ico",
+      "sizes": "32x32",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "https://raw.githubusercontent.com/google/material-design-icons/master/png/action/speed/mw24/2x/web_speed_black_48dp.png",
+      "sizes": "48x48",
+      "type": "image/png"
+    }
+  ]
+}
