@@ -5,17 +5,20 @@ const DEFAULT_SETTINGS = {
     workStart: "08:00",
     workEnd: "20:00",
     usage: 0,
+    darkMode: false,
     history: [] // { date: 'YYYY-MM-DD', value: 0 }
 };
 
 class ClaudeTracker {
     constructor() {
-        this.settings = JSON.parse(localStorage.getItem('claude_settings')) || { ...DEFAULT_SETTINGS };
+        const stored = JSON.parse(localStorage.getItem('claude_settings')) || {};
+        this.settings = { ...DEFAULT_SETTINGS, ...stored };
         this.initElements();
         this.initChart();
         this.addEventListeners();
         this.update();
-        
+        this.applyTheme(this.settings.darkMode);
+
         // Atualiza a cada minuto
         setInterval(() => this.update(), 60000);
     }
@@ -43,6 +46,10 @@ class ClaudeTracker {
         this.inWorkStart = document.getElementById('work-start');
         this.inWorkEnd = document.getElementById('work-end');
 
+        // Dark mode toggle
+        this.btnToggleDark = document.getElementById('toggle-dark-mode');
+        this.toggleThumb = document.getElementById('toggle-dark-mode-thumb');
+
         // Carregar valores iniciais nos inputs
         this.inResetDay.value = this.settings.resetDay;
         this.inResetTime.value = this.settings.resetTime;
@@ -50,6 +57,7 @@ class ClaudeTracker {
         this.inWorkEnd.value = this.settings.workEnd;
         this.slider.value = this.settings.usage;
         this.sliderVal.innerText = `${this.settings.usage}%`;
+        this._syncToggleVisual(this.settings.darkMode);
     }
 
     initChart() {
@@ -92,6 +100,13 @@ class ClaudeTracker {
         this.btnSettings.addEventListener('click', () => this.modal.classList.remove('hidden'));
         this.btnCloseModal.addEventListener('click', () => this.modal.classList.add('hidden'));
         this.btnSaveSettings.addEventListener('click', () => this.saveSettings());
+
+        this.btnToggleDark.addEventListener('click', () => {
+            const isDark = !this.settings.darkMode;
+            this.settings.darkMode = isDark;
+            this._syncToggleVisual(isDark);
+            this.applyTheme(isDark);
+        });
     }
 
     saveUsage() {
@@ -225,6 +240,41 @@ class ClaudeTracker {
         const days = Math.floor(timeRemaining / 86400000);
         const hours = Math.floor((timeRemaining % 86400000) / 3600000);
         this.timeRemainingText.innerText = `${days}d ${hours}h`;
+    }
+
+    _syncToggleVisual(isDark) {
+        this.btnToggleDark.setAttribute('aria-checked', String(isDark));
+        if (isDark) {
+            this.btnToggleDark.classList.replace('bg-slate-200', 'bg-blue-600');
+            this.toggleThumb.classList.replace('translate-x-1', 'translate-x-6');
+        } else {
+            this.btnToggleDark.classList.replace('bg-blue-600', 'bg-slate-200');
+            this.toggleThumb.classList.replace('translate-x-6', 'translate-x-1');
+        }
+    }
+
+    applyTheme(isDark) {
+        if (isDark) {
+            document.documentElement.classList.add('dark');
+        } else {
+            document.documentElement.classList.remove('dark');
+        }
+        document.querySelector('meta[name="theme-color"]')
+            .setAttribute('content', isDark ? '#1e293b' : '#3b82f6');
+        this.updateChartColors(isDark);
+    }
+
+    updateChartColors(isDark) {
+        const gridColor = isDark ? 'rgba(148, 163, 184, 0.15)' : 'rgba(0, 0, 0, 0.1)';
+        const tickColor = isDark ? '#94a3b8' : '#666';
+
+        this.chart.data.datasets[0].backgroundColor = isDark
+            ? 'rgba(59, 130, 246, 0.15)'
+            : 'rgba(59, 130, 246, 0.1)';
+        this.chart.options.scales.y.grid = { color: gridColor };
+        this.chart.options.scales.y.ticks = { color: tickColor };
+        this.chart.options.scales.x = { grid: { color: gridColor }, ticks: { color: tickColor } };
+        this.chart.update();
     }
 
     updateChart() {
