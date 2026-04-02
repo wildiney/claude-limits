@@ -14,6 +14,7 @@ class ClaudeTracker {
         const stored = JSON.parse(localStorage.getItem('claude_settings')) || {};
         this.settings = { ...DEFAULT_SETTINGS, ...stored };
         this.initElements();
+        this.stats = this.calculateStats();
         this.initChart();
         this.addEventListeners();
         this.update();
@@ -65,15 +66,27 @@ class ClaudeTracker {
         this.chart = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: this.getLast7DaysLabels(),
-                datasets: [{
-                    label: 'Uso Real (%)',
-                    data: this.getHistoryData(),
-                    borderColor: '#3b82f6',
-                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                    fill: true,
-                    tension: 0.4
-                }]
+                labels: this.getCycleLabels(),
+                datasets: [
+                    {
+                        label: 'Uso Real (%)',
+                        data: this.getCycleHistoryData(),
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    },
+                    {
+                        label: 'Ideal (%)',
+                        data: this.getCycleIdealData(),
+                        borderColor: '#10b981',
+                        borderDash: [5, 5],
+                        backgroundColor: 'transparent',
+                        fill: false,
+                        tension: 0.4,
+                        pointRadius: 3
+                    }
+                ]
             },
             options: {
                 responsive: true,
@@ -82,7 +95,7 @@ class ClaudeTracker {
                     y: { beginAtZero: true, max: 100 }
                 },
                 plugins: {
-                    legend: { display: false }
+                    legend: { display: true }
                 }
             }
         });
@@ -142,6 +155,7 @@ class ClaudeTracker {
         const stats = this.calculateStats();
         this.stats = stats;
         this.updateUI();
+        this.updateChart();
     }
 
     calculateStats() {
@@ -193,6 +207,7 @@ class ClaudeTracker {
 
         return {
             idealUsage: Math.min(100, Math.max(0, idealUsage)),
+            lastReset,
             nextReset,
             timeRemaining: nextReset - now
         };
@@ -267,6 +282,7 @@ class ClaudeTracker {
     updateChartColors(isDark) {
         const gridColor = isDark ? 'rgba(148, 163, 184, 0.15)' : 'rgba(0, 0, 0, 0.1)';
         const tickColor = isDark ? '#94a3b8' : '#666';
+        const legendColor = isDark ? '#94a3b8' : '#666';
 
         this.chart.data.datasets[0].backgroundColor = isDark
             ? 'rgba(59, 130, 246, 0.15)'
@@ -274,32 +290,80 @@ class ClaudeTracker {
         this.chart.options.scales.y.grid = { color: gridColor };
         this.chart.options.scales.y.ticks = { color: tickColor };
         this.chart.options.scales.x = { grid: { color: gridColor }, ticks: { color: tickColor } };
+        this.chart.options.plugins.legend.labels = { color: legendColor };
         this.chart.update();
     }
 
     updateChart() {
-        this.chart.data.datasets[0].data = this.getHistoryData();
+        this.chart.data.labels = this.getCycleLabels();
+        this.chart.data.datasets[0].data = this.getCycleHistoryData();
+        this.chart.data.datasets[1].data = this.getCycleIdealData();
         this.chart.update();
     }
 
-    getLast7DaysLabels() {
+    getCycleLabels() {
         const labels = [];
-        for (let i = 6; i >= 0; i--) {
-            const d = new Date();
-            d.setDate(d.getDate() - i);
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(this.stats.lastReset);
+            d.setDate(d.getDate() + i);
             labels.push(d.toLocaleDateString('pt-BR', { weekday: 'short' }));
         }
         return labels;
     }
 
-    getHistoryData() {
+    getCycleHistoryData() {
         const data = [];
-        for (let i = 6; i >= 0; i--) {
-            const d = new Date();
-            d.setDate(d.getDate() - i);
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(this.stats.lastReset);
+            d.setDate(d.getDate() + i);
             const dateStr = d.toISOString().split('T')[0];
-            const historyItem = this.settings.history.find(h => h.date === dateStr);
-            data.push(historyItem ? historyItem.value : null);
+            const item = this.settings.history.find(h => h.date === dateStr);
+            data.push(item ? item.value : null);
+        }
+        return data;
+    }
+
+    getCycleIdealData() {
+        const now = new Date();
+        const today = new Date(now);
+        today.setHours(0, 0, 0, 0);
+
+        const [startH, startM] = this.settings.workStart.split(':').map(Number);
+        const [endH, endM] = this.settings.workEnd.split(':').map(Number);
+        const dailyWorkMinutes = (endH * 60 + endM) - (startH * 60 + startM);
+        const totalCycleWorkMinutes = dailyWorkMinutes * 7;
+
+        const data = [];
+        for (let i = 0; i < 7; i++) {
+            const d = new Date(this.stats.lastReset);
+            d.setDate(d.getDate() + i);
+            d.setHours(0, 0, 0, 0);
+
+            if (d > today) { data.push(null); continue; }
+
+            let cutoff;
+            if (d.getTime() === today.getTime()) {
+                cutoff = now;
+            } else {
+                cutoff = new Date(d);
+                cutoff.setHours(endH, endM, 0, 0);
+            }
+
+            let passed = 0;
+            let check = new Date(this.stats.lastReset);
+            while (check < cutoff) {
+                const ws = new Date(check); ws.setHours(startH, startM, 0, 0);
+                const we = new Date(check); we.setHours(endH, endM, 0, 0);
+                if (cutoff > ws) {
+                    const es = check > ws ? check : ws;
+                    const ee = cutoff < we ? cutoff : we;
+                    if (ee > es) passed += (ee - es) / 60000;
+                }
+                check.setDate(check.getDate() + 1);
+                check.setHours(0, 0, 0, 0);
+            }
+
+            data.push(Math.min(100, Math.max(0, (passed / totalCycleWorkMinutes) * 100)));
         }
         return data;
     }
