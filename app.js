@@ -405,46 +405,17 @@ class ClaudeTracker {
     }
 
     getCycleIdealData() {
-        const now = new Date();
-        const today = new Date(now);
-        today.setHours(0, 0, 0, 0);
-
-        const [startH, startM] = this.settings.workStart.split(':').map(Number);
         const [endH, endM] = this.settings.workEnd.split(':').map(Number);
-        const dailyWorkMinutes = (endH * 60 + endM) - (startH * 60 + startM);
-        const totalCycleWorkMinutes = dailyWorkMinutes * 7;
+        const totalCycleMs = this.stats.nextReset - this.stats.lastReset;
 
         const data = [];
         for (let i = 0; i < 7; i++) {
             const d = new Date(this.stats.lastReset);
             d.setDate(d.getDate() + i);
-            d.setHours(0, 0, 0, 0);
+            d.setHours(endH, endM, 0, 0);
 
-            if (d > today) { data.push(null); continue; }
-
-            let cutoff;
-            if (d.getTime() === today.getTime()) {
-                cutoff = now;
-            } else {
-                cutoff = new Date(d);
-                cutoff.setHours(endH, endM, 0, 0);
-            }
-
-            let passed = 0;
-            let check = new Date(this.stats.lastReset);
-            while (check < cutoff) {
-                const ws = new Date(check); ws.setHours(startH, startM, 0, 0);
-                const we = new Date(check); we.setHours(endH, endM, 0, 0);
-                if (cutoff > ws) {
-                    const es = check > ws ? check : ws;
-                    const ee = cutoff < we ? cutoff : we;
-                    if (ee > es) passed += (ee - es) / 60000;
-                }
-                check.setDate(check.getDate() + 1);
-                check.setHours(0, 0, 0, 0);
-            }
-
-            data.push(Math.min(100, Math.max(0, (passed / totalCycleWorkMinutes) * 100)));
+            const elapsed = d - this.stats.lastReset;
+            data.push(Math.min(100, Math.max(0, (elapsed / totalCycleMs) * 100)));
         }
         return data;
     }
