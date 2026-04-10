@@ -135,7 +135,7 @@ class ClaudeTracker {
             const date = e.target.dataset.date;
             let value = Math.min(100, Math.max(0, parseInt(e.target.value, 10) || 0));
             e.target.value = value;
-            const today = new Date().toISOString().split('T')[0];
+            const today = this._toLocalDateStr(new Date());
             if (date === today) {
                 this.settings.usage = value;
                 this.slider.value = value;
@@ -160,7 +160,7 @@ class ClaudeTracker {
     }
 
     updateHistory(date, value) {
-        const targetDate = date ?? new Date().toISOString().split('T')[0];
+        const targetDate = date ?? this._toLocalDateStr(new Date());
         const targetValue = value ?? this.settings.usage;
         const historyIndex = this.settings.history.findIndex(h => h.date === targetDate);
         if (historyIndex > -1) {
@@ -180,7 +180,7 @@ class ClaudeTracker {
         for (let i = 0; i < 7; i++) {
             const d = new Date(today);
             d.setDate(today.getDate() - i);
-            const dateStr = d.toISOString().split('T')[0];
+            const dateStr = this._toLocalDateStr(d);
             const entry = this.settings.history.find(h => h.date === dateStr);
             const val = entry ? entry.value : 0;
             const label = d.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
@@ -385,7 +385,7 @@ class ClaudeTracker {
         for (let i = 0; i < 7; i++) {
             const d = new Date(this.stats.lastReset);
             d.setDate(d.getDate() + i);
-            const dateStr = d.toISOString().split('T')[0];
+            const dateStr = this._toLocalDateStr(d);
             const item = this.settings.history.find(h => h.date === dateStr);
             data.push(item ? item.value : null);
         }
@@ -397,11 +397,15 @@ class ClaudeTracker {
         for (let i = 0; i < 7; i++) {
             const d = new Date(this.stats.lastReset);
             d.setDate(d.getDate() + i - 7);
-            const dateStr = d.toISOString().split('T')[0];
+            const dateStr = this._toLocalDateStr(d);
             const item = this.settings.history.find(h => h.date === dateStr);
             data.push(item ? item.value : null);
         }
         return data;
+    }
+
+    _toLocalDateStr(d) {
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
 
     getCycleIdealData() {
