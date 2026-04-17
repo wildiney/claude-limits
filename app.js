@@ -1,18 +1,16 @@
-// Configurações Padrão
 const DEFAULT_SETTINGS = {
-    resetDay: 5, // Sexta-feira
-    resetTime: "08:00",
+    cycleStart: null,
     workStart: "08:00",
     workEnd: "20:00",
     usage: 0,
     darkMode: false,
-    history: [], // { date: 'YYYY-MM-DD', value: 0 }
-    lastResetTimestamp: null
+    history: [] // { cycleStart: ISO, dayIndex: 0-6, value: 0-100 }
 };
 
 class ClaudeTracker {
     constructor() {
-        const stored = JSON.parse(localStorage.getItem('claude_settings')) || {};
+        let stored = JSON.parse(localStorage.getItem('claude_settings')) || {};
+        stored = this._migrate(stored);
         this.settings = { ...DEFAULT_SETTINGS, ...stored };
         this.initElements();
         this.stats = this.calculateStats();
@@ -20,9 +18,58 @@ class ClaudeTracker {
         this.addEventListeners();
         this.update();
         this.applyTheme(this.settings.darkMode);
-
-        // Atualiza a cada minuto
         setInterval(() => this.update(), 60000);
+    }
+
+    _migrate(stored) {
+        if (!stored.history || stored.history.length === 0 || stored.history[0].cycleStart !== undefined) {
+            delete stored.resetDay;
+            delete stored.resetTime;
+            delete stored.lastResetTimestamp;
+            return stored;
+        }
+
+        // Old format: { date: "YYYY-MM-DD", value }
+        const oldHistory = stored.history;
+        let cycleStartISO = stored.lastResetTimestamp || null;
+
+        if (!cycleStartISO && stored.resetDay !== undefined && stored.resetTime) {
+            const now = new Date();
+            let d = new Date(now);
+            const [rH, rM] = stored.resetTime.split(':').map(Number);
+            d.setHours(rH, rM, 0, 0);
+            while (d.getDay() !== stored.resetDay || d > now) d.setDate(d.getDate() - 1);
+            cycleStartISO = d.toISOString();
+        }
+
+        const newHistory = [];
+        if (cycleStartISO) {
+            const cycleStart = new Date(cycleStartISO);
+            const prevCycleStart = new Date(cycleStart);
+            prevCycleStart.setDate(prevCycleStart.getDate() - 7);
+            const prevISO = prevCycleStart.toISOString();
+
+            for (const entry of oldHistory) {
+                const entryDate = new Date(`${entry.date}T12:00:00`);
+                const daysSince = Math.round((entryDate - cycleStart) / 86400000);
+
+                if (daysSince >= 0 && daysSince <= 6) {
+                    newHistory.push({ cycleStart: cycleStartISO, dayIndex: daysSince, value: entry.value });
+                } else {
+                    const daysSincePrev = Math.round((entryDate - prevCycleStart) / 86400000);
+                    if (daysSincePrev >= 0 && daysSincePrev <= 6) {
+                        newHistory.push({ cycleStart: prevISO, dayIndex: daysSincePrev, value: entry.value });
+                    }
+                }
+            }
+        }
+
+        stored.history = newHistory;
+        stored.cycleStart = cycleStartISO;
+        delete stored.resetDay;
+        delete stored.resetTime;
+        delete stored.lastResetTimestamp;
+        return stored;
     }
 
     initElements() {
@@ -35,31 +82,38 @@ class ClaudeTracker {
         this.diffText = document.getElementById('diff-text');
         this.nextResetText = document.getElementById('next-reset-time');
         this.timeRemainingText = document.getElementById('time-remaining');
-        
-        // Modal
+
         this.modal = document.getElementById('modal-settings');
         this.btnSettings = document.getElementById('btn-settings');
         this.btnCloseModal = document.getElementById('close-modal');
         this.btnSaveSettings = document.getElementById('save-settings');
-        
-        // Inputs Settings
-        this.inResetDay = document.getElementById('reset-day');
-        this.inResetTime = document.getElementById('reset-time');
+
+        this.inCycleStart = document.getElementById('cycle-start');
         this.inWorkStart = document.getElementById('work-start');
         this.inWorkEnd = document.getElementById('work-end');
+        this.btnRegisterReset = document.getElementById('btn-register-reset');
 
-        // Dark mode toggle
         this.btnToggleDark = document.getElementById('toggle-dark-mode');
         this.toggleThumb = document.getElementById('toggle-dark-mode-thumb');
 
-        // Carregar valores iniciais nos inputs
-        this.inResetDay.value = this.settings.resetDay;
-        this.inResetTime.value = this.settings.resetTime;
+        this._syncCycleStartInput();
         this.inWorkStart.value = this.settings.workStart;
         this.inWorkEnd.value = this.settings.workEnd;
         this.slider.value = this.settings.usage;
         this.sliderVal.innerText = `${this.settings.usage}%`;
         this._syncToggleVisual(this.settings.darkMode);
+    }
+
+    _isoToDatetimeLocal(iso) {
+        const d = new Date(iso);
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    _syncCycleStartInput() {
+        this.inCycleStart.value = this.settings.cycleStart
+            ? this._isoToDatetimeLocal(this.settings.cycleStart)
+            : '';
     }
 
     initChart() {
@@ -88,7 +142,7 @@ class ClaudeTracker {
                         pointRadius: 3
                     },
                     {
-                        label: 'Semana Passada (%)',
+                        label: 'Ciclo Anterior (%)',
                         data: this.getPreviousCycleData(),
                         borderColor: 'rgba(148, 163, 184, 0.7)',
                         borderDash: [4, 4],
@@ -124,25 +178,32 @@ class ClaudeTracker {
         });
 
         this.btnSettings.addEventListener('click', () => {
+            this._syncCycleStartInput();
             this.renderHistoryEditor();
             this.modal.classList.remove('hidden');
         });
         this.btnCloseModal.addEventListener('click', () => this.modal.classList.add('hidden'));
         this.btnSaveSettings.addEventListener('click', () => this.saveSettings());
 
+        this.btnRegisterReset.addEventListener('click', () => {
+            this.inCycleStart.value = this._isoToDatetimeLocal(new Date().toISOString());
+        });
+
         document.getElementById('history-edit-list').addEventListener('change', (e) => {
             if (!e.target.matches('.history-edit-input')) return;
-            const date = e.target.dataset.date;
+            const cycleStart = e.target.dataset.cycleStart;
+            const dayIndex = parseInt(e.target.dataset.dayIndex, 10);
             let value = Math.min(100, Math.max(0, parseInt(e.target.value, 10) || 0));
             e.target.value = value;
-            const today = this._toLocalDateStr(new Date());
-            if (date === today) {
+
+            const currentDayIndex = this._getCurrentDayIndex();
+            if (cycleStart === this.settings.cycleStart && dayIndex === currentDayIndex) {
                 this.settings.usage = value;
                 this.slider.value = value;
                 this.sliderVal.innerText = `${value}%`;
                 localStorage.setItem('claude_settings', JSON.stringify(this.settings));
             }
-            this.updateHistory(date, value);
+            this.updateHistory(cycleStart, dayIndex, value);
             this.update();
         });
 
@@ -154,20 +215,30 @@ class ClaudeTracker {
         });
     }
 
-    saveUsage() {
-        localStorage.setItem('claude_settings', JSON.stringify(this.settings));
-        this.updateHistory();
+    _getCurrentDayIndex() {
+        if (!this.settings.cycleStart) return 0;
+        const now = new Date();
+        const lastReset = new Date(this.settings.cycleStart);
+        return Math.max(0, Math.min(6, Math.floor((now - lastReset) / 86400000)));
     }
 
-    updateHistory(date, value) {
-        const targetDate = date ?? this._toLocalDateStr(new Date());
-        const targetValue = value ?? this.settings.usage;
-        const historyIndex = this.settings.history.findIndex(h => h.date === targetDate);
-        if (historyIndex > -1) {
-            this.settings.history[historyIndex].value = targetValue;
+    saveUsage() {
+        localStorage.setItem('claude_settings', JSON.stringify(this.settings));
+        const cycleStart = this.settings.cycleStart;
+        if (cycleStart) {
+            this.updateHistory(cycleStart, this._getCurrentDayIndex(), this.settings.usage);
+        }
+    }
+
+    updateHistory(cycleStart, dayIndex, value) {
+        const existing = this.settings.history.findIndex(
+            h => h.cycleStart === cycleStart && h.dayIndex === dayIndex
+        );
+        if (existing > -1) {
+            this.settings.history[existing].value = value;
         } else {
-            this.settings.history.push({ date: targetDate, value: targetValue });
-            if (this.settings.history.length > 30) this.settings.history.shift();
+            this.settings.history.push({ cycleStart, dayIndex, value });
+            if (this.settings.history.length > 70) this.settings.history.shift();
         }
         localStorage.setItem('claude_settings', JSON.stringify(this.settings));
         this.updateChart();
@@ -176,82 +247,88 @@ class ClaudeTracker {
     renderHistoryEditor() {
         const container = document.getElementById('history-edit-list');
         container.innerHTML = '';
-        const today = new Date();
+
+        const cycleStart = this.settings.cycleStart;
+        if (!cycleStart) {
+            container.innerHTML = '<p class="text-xs text-slate-400">Configure o início do ciclo para editar o histórico.</p>';
+            return;
+        }
+
+        const cycleStartDate = new Date(cycleStart);
+        const currentDayIndex = this._getCurrentDayIndex();
+
         for (let i = 0; i < 7; i++) {
-            const d = new Date(today);
-            d.setDate(today.getDate() - i);
-            const dateStr = this._toLocalDateStr(d);
-            const entry = this.settings.history.find(h => h.date === dateStr);
+            const d = new Date(cycleStartDate);
+            d.setDate(d.getDate() + i);
+            const entry = this.settings.history.find(h => h.cycleStart === cycleStart && h.dayIndex === i);
             const val = entry ? entry.value : 0;
-            const label = d.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
+            const dateLabel = d.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
+            const isToday = i === currentDayIndex;
+            const isFuture = i > currentDayIndex;
+
             const row = document.createElement('div');
             row.className = 'flex items-center gap-3';
             row.innerHTML = `
-                <span class="text-xs text-slate-500 dark:text-slate-400 w-20 shrink-0">${label}</span>
-                <input type="number" min="0" max="100" value="${val}" data-date="${dateStr}"
-                       class="history-edit-input w-20 p-1 text-sm rounded-lg border border-slate-200 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 text-right">
+                <span class="text-xs ${isToday ? 'text-blue-500 font-semibold' : 'text-slate-500 dark:text-slate-400'} w-32 shrink-0">D${i + 1} · ${dateLabel}${isToday ? ' ◀' : ''}</span>
+                <input type="number" min="0" max="100" value="${val}"
+                       data-cycle-start="${cycleStart}" data-day-index="${i}"
+                       class="history-edit-input w-20 p-1 text-sm rounded-lg border border-slate-200 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 text-right disabled:opacity-40"
+                       ${isFuture ? 'disabled' : ''}>
                 <span class="text-xs text-slate-400">%</span>`;
             container.appendChild(row);
         }
     }
 
     saveSettings() {
-        this.settings.resetDay = parseInt(this.inResetDay.value);
-        this.settings.resetTime = this.inResetTime.value;
+        const cycleStartInput = this.inCycleStart.value;
+        const newCycleStart = cycleStartInput ? new Date(cycleStartInput).toISOString() : null;
+        const cycleChanged = newCycleStart && newCycleStart !== this.settings.cycleStart;
+
+        if (cycleChanged) {
+            this.settings.usage = 0;
+            this.slider.value = 0;
+            this.sliderVal.innerText = '0%';
+        }
+
+        if (newCycleStart) this.settings.cycleStart = newCycleStart;
         this.settings.workStart = this.inWorkStart.value;
         this.settings.workEnd = this.inWorkEnd.value;
-        
+
         localStorage.setItem('claude_settings', JSON.stringify(this.settings));
         this.modal.classList.add('hidden');
         this.update();
     }
 
     update() {
-        const stats = this.calculateStats();
-        this.stats = stats;
-        this._checkAndApplyReset(stats.lastReset);
+        this.stats = this.calculateStats();
         this.updateUI();
         this.updateChart();
     }
 
-    _checkAndApplyReset(lastReset) {
-        const lastResetISO = lastReset.toISOString();
-        const stored = this.settings.lastResetTimestamp;
-        if (!stored || lastResetISO > stored) {
-            this.settings.usage = 0;
-            this.settings.lastResetTimestamp = lastResetISO;
-            this.slider.value = 0;
-            this.sliderVal.innerText = '0%';
-            localStorage.setItem('claude_settings', JSON.stringify(this.settings));
-        }
-    }
-
     calculateStats() {
         const now = new Date();
-        
-        // Encontrar o último reset
-        let lastReset = new Date(now);
-        const [resetH, resetM] = this.settings.resetTime.split(':').map(Number);
-        lastReset.setHours(resetH, resetM, 0, 0);
-        
-        while (lastReset.getDay() !== this.settings.resetDay || lastReset > now) {
-            lastReset.setDate(lastReset.getDate() - 1);
+
+        let lastReset;
+        if (this.settings.cycleStart) {
+            lastReset = new Date(this.settings.cycleStart);
+            if (lastReset > now) lastReset = new Date(now.getTime() - 7 * 86400000);
+        } else {
+            lastReset = new Date(now);
+            lastReset.setHours(8, 0, 0, 0);
+            if (lastReset > now) lastReset.setDate(lastReset.getDate() - 1);
         }
 
-        // Próximo reset
-        let nextReset = new Date(lastReset);
+        const nextReset = new Date(lastReset);
         nextReset.setDate(nextReset.getDate() + 7);
 
-        // Horas úteis diárias
         const [startH, startM] = this.settings.workStart.split(':').map(Number);
         const [endH, endM] = this.settings.workEnd.split(':').map(Number);
         const dailyWorkMinutes = (endH * 60 + endM) - (startH * 60 + startM);
         const totalCycleWorkMinutes = dailyWorkMinutes * 7;
 
-        // Calcular minutos úteis passados desde o reset
         let passedWorkMinutes = 0;
         let checkDate = new Date(lastReset);
-        
+
         while (checkDate < now) {
             const dayStart = new Date(checkDate);
             dayStart.setHours(startH, startM, 0, 0);
@@ -261,17 +338,18 @@ class ClaudeTracker {
             if (now > dayStart) {
                 const effectiveStart = checkDate > dayStart ? checkDate : dayStart;
                 const effectiveEnd = now < dayEnd ? now : dayEnd;
-                
                 if (effectiveEnd > effectiveStart) {
                     passedWorkMinutes += (effectiveEnd - effectiveStart) / 60000;
                 }
             }
-            
+
             checkDate.setDate(checkDate.getDate() + 1);
-            checkDate.setHours(0,0,0,0);
+            checkDate.setHours(0, 0, 0, 0);
         }
 
-        const idealUsage = (passedWorkMinutes / totalCycleWorkMinutes) * 100;
+        const idealUsage = totalCycleWorkMinutes > 0
+            ? (passedWorkMinutes / totalCycleWorkMinutes) * 100
+            : 0;
 
         return {
             idealUsage: Math.min(100, Math.max(0, idealUsage)),
@@ -287,19 +365,15 @@ class ClaudeTracker {
 
         this.currentUsageVal.innerText = `${currentUsage}%`;
         this.idealUsageVal.innerText = `${idealUsage.toFixed(1)}%`;
-        
-        // Progress Ring
+
         const offset = 263.89 - (currentUsage / 100 * 263.89);
         this.progressCircle.style.strokeDashoffset = offset;
 
-        // Colors & Status
+        const diff = currentUsage - idealUsage;
+        this.progressCircle.classList.remove('text-blue-500', 'text-yellow-500', 'text-red-500');
+
         let colorClass = 'text-green-500';
         let status = 'Dentro do limite';
-        
-        const diff = currentUsage - idealUsage;
-        
-        // Reset classes do círculo
-        this.progressCircle.classList.remove('text-blue-500', 'text-yellow-500', 'text-red-500');
 
         if (diff > 10) {
             colorClass = 'text-red-500';
@@ -317,9 +391,8 @@ class ClaudeTracker {
         this.diffText.className = `text-xs font-semibold mt-1 ${colorClass}`;
         this.statusText.innerText = `Você está ${Math.abs(diff).toFixed(1)}% ${diff > 0 ? 'acima' : 'abaixo'} da meta ideal.`;
 
-        // Time Info
         this.nextResetText.innerText = nextReset.toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-        
+
         const days = Math.floor(timeRemaining / 86400000);
         const hours = Math.floor((timeRemaining % 86400000) / 3600000);
         this.timeRemainingText.innerText = `${days}d ${hours}h`;
@@ -375,57 +448,59 @@ class ClaudeTracker {
         for (let i = 0; i < 7; i++) {
             const d = new Date(this.stats.lastReset);
             d.setDate(d.getDate() + i);
-            labels.push(d.toLocaleDateString('pt-BR', { weekday: 'short' }));
+            const dateLabel = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+            labels.push(`D${i + 1} · ${dateLabel}`);
         }
         return labels;
     }
 
     getCycleHistoryData() {
-        const data = [];
-        for (let i = 0; i < 7; i++) {
-            const d = new Date(this.stats.lastReset);
-            d.setDate(d.getDate() + i);
-            const dateStr = this._toLocalDateStr(d);
-            const item = this.settings.history.find(h => h.date === dateStr);
-            data.push(item ? item.value : null);
+        const cycleStart = this.settings.cycleStart;
+        if (!cycleStart) return new Array(7).fill(null);
+        return Array.from({ length: 7 }, (_, i) => {
+            const entry = this.settings.history.find(h => h.cycleStart === cycleStart && h.dayIndex === i);
+            return entry ? entry.value : null;
+        });
+    }
+
+    _getPrevCycleStart() {
+        const currentCycleStart = this.settings.cycleStart;
+        const allCycles = [...new Set(this.settings.history.map(h => h.cycleStart))]
+            .filter(Boolean)
+            .sort();
+        const idx = allCycles.indexOf(currentCycleStart);
+        if (idx > 0) return allCycles[idx - 1];
+        if (currentCycleStart) {
+            const d = new Date(currentCycleStart);
+            d.setDate(d.getDate() - 7);
+            return d.toISOString();
         }
-        return data;
+        return null;
     }
 
     getPreviousCycleData() {
-        const data = [];
-        for (let i = 0; i < 7; i++) {
-            const d = new Date(this.stats.lastReset);
-            d.setDate(d.getDate() + i - 7);
-            const dateStr = this._toLocalDateStr(d);
-            const item = this.settings.history.find(h => h.date === dateStr);
-            data.push(item ? item.value : null);
-        }
-        return data;
-    }
-
-    _toLocalDateStr(d) {
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const prevCycleStart = this._getPrevCycleStart();
+        if (!prevCycleStart) return new Array(7).fill(null);
+        return Array.from({ length: 7 }, (_, i) => {
+            const entry = this.settings.history.find(h => h.cycleStart === prevCycleStart && h.dayIndex === i);
+            return entry ? entry.value : null;
+        });
     }
 
     getCycleIdealData() {
         const [endH, endM] = this.settings.workEnd.split(':').map(Number);
         const totalCycleMs = this.stats.nextReset - this.stats.lastReset;
 
-        const data = [];
-        for (let i = 0; i < 7; i++) {
+        return Array.from({ length: 7 }, (_, i) => {
             const d = new Date(this.stats.lastReset);
             d.setDate(d.getDate() + i);
             d.setHours(endH, endM, 0, 0);
-
             const elapsed = d - this.stats.lastReset;
-            data.push(Math.min(100, Math.max(0, (elapsed / totalCycleMs) * 100)));
-        }
-        return data;
+            return Math.min(100, Math.max(0, (elapsed / totalCycleMs) * 100));
+        });
     }
 }
 
-// Inicializar
 window.addEventListener('DOMContentLoaded', () => {
     new ClaudeTracker();
 });
