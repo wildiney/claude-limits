@@ -215,11 +215,15 @@ class ClaudeTracker {
         });
     }
 
+    _localMidnight(d) {
+        return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    }
+
     _getCurrentDayIndex() {
         if (!this.settings.cycleStart) return 0;
-        const now = new Date();
-        const lastReset = new Date(this.settings.cycleStart);
-        return Math.max(0, Math.min(6, Math.floor((now - lastReset) / 86400000)));
+        const nowDay = this._localMidnight(new Date());
+        const resetDay = this._localMidnight(new Date(this.settings.cycleStart));
+        return Math.max(0, Math.min(6, Math.floor((nowDay - resetDay) / 86400000)));
     }
 
     saveUsage() {
@@ -254,11 +258,11 @@ class ClaudeTracker {
             return;
         }
 
-        const cycleStartDate = new Date(cycleStart);
+        const cycleStartBase = this._localMidnight(new Date(cycleStart));
         const currentDayIndex = this._getCurrentDayIndex();
 
         for (let i = 0; i < 7; i++) {
-            const d = new Date(cycleStartDate);
+            const d = new Date(cycleStartBase);
             d.setDate(d.getDate() + i);
             const entry = this.settings.history.find(h => h.cycleStart === cycleStart && h.dayIndex === i);
             const val = entry ? entry.value : 0;
@@ -281,7 +285,9 @@ class ClaudeTracker {
 
     saveSettings() {
         const cycleStartInput = this.inCycleStart.value;
-        const newCycleStart = cycleStartInput ? new Date(cycleStartInput).toISOString() : null;
+        const newCycleStart = cycleStartInput
+            ? this._localMidnight(new Date(cycleStartInput)).toISOString()
+            : null;
         const cycleChanged = newCycleStart && newCycleStart !== this.settings.cycleStart;
 
         if (cycleChanged) {
@@ -445,8 +451,9 @@ class ClaudeTracker {
 
     getCycleLabels() {
         const labels = [];
+        const base = this._localMidnight(this.stats.lastReset);
         for (let i = 0; i < 7; i++) {
-            const d = new Date(this.stats.lastReset);
+            const d = new Date(base);
             d.setDate(d.getDate() + i);
             const dateLabel = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
             labels.push(`D${i + 1} · ${dateLabel}`);
