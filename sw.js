@@ -1,4 +1,4 @@
-const CACHE_NAME = 'claude-tracker-v4';
+const CACHE_NAME = 'claude-tracker-v5';
 const ASSETS = [
     './',
     './index.html',

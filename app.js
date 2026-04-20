@@ -21,12 +21,30 @@ class ClaudeTracker {
         setInterval(() => this.update(), 60000);
     }
 
+    _fixUtcMidnightCycleStart(stored) {
+        if (!stored.cycleStart || !stored.cycleStart.endsWith('T00:00:00.000Z')) return stored;
+        const datePart = stored.cycleStart.substring(0, 10);
+        const [year, month, day] = datePart.split('-').map(Number);
+        const localMidnight = new Date(year, month - 1, day);
+        const newISO = localMidnight.toISOString();
+        if (newISO === stored.cycleStart) return stored; // UTC+0, no fix needed
+        const oldISO = stored.cycleStart;
+        stored.cycleStart = newISO;
+        if (stored.history) {
+            stored.history = stored.history.map(h =>
+                h.cycleStart === oldISO ? { ...h, cycleStart: newISO } : h
+            );
+        }
+        localStorage.setItem('claude_settings', JSON.stringify(stored));
+        return stored;
+    }
+
     _migrate(stored) {
         if (!stored.history || stored.history.length === 0 || stored.history[0].cycleStart !== undefined) {
             delete stored.resetDay;
             delete stored.resetTime;
             delete stored.lastResetTimestamp;
-            return stored;
+            return this._fixUtcMidnightCycleStart(stored);
         }
 
         // Old format: { date: "YYYY-MM-DD", value }
@@ -69,7 +87,7 @@ class ClaudeTracker {
         delete stored.resetDay;
         delete stored.resetTime;
         delete stored.lastResetTimestamp;
-        return stored;
+        return this._fixUtcMidnightCycleStart(stored);
     }
 
     initElements() {
