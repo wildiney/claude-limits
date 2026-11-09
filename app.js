@@ -12,6 +12,7 @@ class ClaudeTracker {
         let stored = JSON.parse(localStorage.getItem('claude_settings')) || {};
         stored = this._migrate(stored);
         this.settings = { ...DEFAULT_SETTINGS, ...stored };
+        this._healOrphanHistory();
         this.initElements();
         this.stats = this.calculateStats();
         this.initChart();
@@ -47,6 +48,53 @@ class ClaudeTracker {
         }
         localStorage.setItem('claude_settings', JSON.stringify(stored));
         return stored;
+    }
+
+    _sameLocalDay(isoA, isoB) {
+        const a = new Date(isoA), b = new Date(isoB);
+        return a.getFullYear() === b.getFullYear()
+            && a.getMonth() === b.getMonth()
+            && a.getDate() === b.getDate();
+    }
+
+    // History is keyed by the exact cycleStart ISO. When the cycle start is only
+    // adjusted within the same calendar day (e.g. 00:00 -> 09:00), move the entries
+    // to the new key instead of orphaning them. On key collision, a non-zero value wins.
+    _rekeyHistory(oldISO, newISO) {
+        if (oldISO === newISO) return false;
+        let changed = false;
+        for (const h of [...this.settings.history]) {
+            if (h.cycleStart !== oldISO) continue;
+            const clash = this.settings.history.find(
+                x => x !== h && x.cycleStart === newISO && x.dayIndex === h.dayIndex
+            );
+            if (clash) {
+                if (!clash.value && h.value) clash.value = h.value;
+                this.settings.history.splice(this.settings.history.indexOf(h), 1);
+            } else {
+                h.cycleStart = newISO;
+            }
+            changed = true;
+        }
+        return changed;
+    }
+
+    // Recovers entries orphaned by earlier cycle-start edits on the same local day.
+    _healOrphanHistory() {
+        const current = this.settings.cycleStart;
+        if (!current || !Array.isArray(this.settings.history)) return;
+        const orphans = [...new Set(this.settings.history.map(h => h.cycleStart))]
+            .filter(c => c && c !== current && this._sameLocalDay(c, current));
+        if (orphans.length === 0) return;
+        orphans.forEach(o => this._rekeyHistory(o, current));
+        // usage was reset to 0 on the edit; restore today's value from recovered history
+        if (!this.settings.usage) {
+            const today = this.settings.history.find(
+                h => h.cycleStart === current && h.dayIndex === this._getCurrentDayIndex()
+            );
+            if (today && today.value) this.settings.usage = today.value;
+        }
+        localStorage.setItem('claude_settings', JSON.stringify(this.settings));
     }
 
     _migrate(stored) {
@@ -316,7 +364,15 @@ class ClaudeTracker {
         const newCycleStart = cycleStartInput
             ? new Date(cycleStartInput).toISOString()
             : null;
-        const cycleChanged = newCycleStart && newCycleStart !== this.settings.cycleStart;
+        const oldCycleStart = this.settings.cycleStart;
+        // Same local day = correcting the start time of the same cycle, not a new cycle:
+        // keep history and usage.
+        const sameCycle = newCycleStart && oldCycleStart && this._sameLocalDay(oldCycleStart, newCycleStart);
+        const cycleChanged = newCycleStart && newCycleStart !== oldCycleStart && !sameCycle;
+
+        if (sameCycle && newCycleStart !== oldCycleStart) {
+            this._rekeyHistory(oldCycleStart, newCycleStart);
+        }
 
         if (cycleChanged) {
             this.settings.usage = 0;
