@@ -22,12 +22,22 @@ class ClaudeTracker {
     }
 
     _fixUtcMidnightCycleStart(stored) {
-        if (!stored.cycleStart || !stored.cycleStart.endsWith('T00:00:00.000Z')) return stored;
+        // One-time migration. Flag prevents re-running on user-picked times that
+        // happen to equal 00:00Z (e.g. 21:00 BRT), which would otherwise be shifted.
+        if (stored.cycleStartTzFixed) return stored;
+        stored.cycleStartTzFixed = true;
+        if (!stored.cycleStart || !stored.cycleStart.endsWith('T00:00:00.000Z')) {
+            localStorage.setItem('claude_settings', JSON.stringify(stored));
+            return stored;
+        }
         const datePart = stored.cycleStart.substring(0, 10);
         const [year, month, day] = datePart.split('-').map(Number);
         const localMidnight = new Date(year, month - 1, day);
         const newISO = localMidnight.toISOString();
-        if (newISO === stored.cycleStart) return stored; // UTC+0, no fix needed
+        if (newISO === stored.cycleStart) {
+            localStorage.setItem('claude_settings', JSON.stringify(stored));
+            return stored; // UTC+0, no fix needed
+        }
         const oldISO = stored.cycleStart;
         stored.cycleStart = newISO;
         if (stored.history) {
@@ -304,7 +314,7 @@ class ClaudeTracker {
     saveSettings() {
         const cycleStartInput = this.inCycleStart.value;
         const newCycleStart = cycleStartInput
-            ? this._localMidnight(new Date(cycleStartInput)).toISOString()
+            ? new Date(cycleStartInput).toISOString()
             : null;
         const cycleChanged = newCycleStart && newCycleStart !== this.settings.cycleStart;
 
