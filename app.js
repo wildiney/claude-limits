@@ -205,7 +205,10 @@ class ClaudeTracker {
                         borderColor: '#3b82f6',
                         backgroundColor: 'rgba(59, 130, 246, 0.1)',
                         fill: true,
-                        tension: 0.4
+                        tension: 0.4,
+                        pointBackgroundColor: ctx => this._filledCurrent && this._filledCurrent[ctx.dataIndex]
+                            ? 'rgba(255, 255, 255, 0.9)'
+                            : '#3b82f6'
                     },
                     {
                         label: 'Ideal (%)',
@@ -545,13 +548,36 @@ class ClaudeTracker {
         return labels;
     }
 
+    // Usage is cumulative within a cycle, so a day without an entry (no usage) keeps
+    // the previous day's value. Display-only: nothing is written to history, so the
+    // day can still be edited later. Days after lastIndex stay null (no data yet).
+    // `filled[i]` marks carried-forward points so the chart can draw them hollow.
+    _carryForwardSeries(cycleStart, lastIndex) {
+        const data = new Array(7).fill(null);
+        const filled = new Array(7).fill(false);
+        let last = 0;
+        for (let i = 0; i <= lastIndex; i++) {
+            const entry = this.settings.history.find(h => h.cycleStart === cycleStart && h.dayIndex === i);
+            if (entry) {
+                last = entry.value;
+                data[i] = last;
+            } else {
+                data[i] = last;
+                filled[i] = true;
+            }
+        }
+        return { data, filled };
+    }
+
     getCycleHistoryData() {
         const cycleStart = this.settings.cycleStart;
-        if (!cycleStart) return new Array(7).fill(null);
-        return Array.from({ length: 7 }, (_, i) => {
-            const entry = this.settings.history.find(h => h.cycleStart === cycleStart && h.dayIndex === i);
-            return entry ? entry.value : null;
-        });
+        if (!cycleStart) {
+            this._filledCurrent = [];
+            return new Array(7).fill(null);
+        }
+        const { data, filled } = this._carryForwardSeries(cycleStart, this._getCurrentDayIndex());
+        this._filledCurrent = filled;
+        return data;
     }
 
     _getPrevCycleStart() {
@@ -572,10 +598,9 @@ class ClaudeTracker {
     getPreviousCycleData() {
         const prevCycleStart = this._getPrevCycleStart();
         if (!prevCycleStart) return new Array(7).fill(null);
-        return Array.from({ length: 7 }, (_, i) => {
-            const entry = this.settings.history.find(h => h.cycleStart === prevCycleStart && h.dayIndex === i);
-            return entry ? entry.value : null;
-        });
+        const hasEntries = this.settings.history.some(h => h.cycleStart === prevCycleStart);
+        if (!hasEntries) return new Array(7).fill(null);
+        return this._carryForwardSeries(prevCycleStart, 6).data;
     }
 
     getCycleIdealData() {
