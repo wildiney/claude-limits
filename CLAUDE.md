@@ -40,3 +40,7 @@ History stores one entry per day (the latest value for that day). The weekly cha
 ### Service worker cache
 
 `CACHE_NAME = 'claude-tracker-v1'` — bump this string in `sw.js` when deploying changes that must invalidate the cache.
+
+## Debugging
+
+When fixing bugs, always check for deeper root causes (e.g., timezone issues behind date calculations). Don't stop at the surface-level fix.
